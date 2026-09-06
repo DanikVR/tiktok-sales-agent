@@ -16,17 +16,22 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import { ADMIN_TOKEN, TENANT_ID } from '../config.js';
-import { getSettings, getSettingsBySlug, getSocialAccounts, getSocialStatus, setCrawlStatus, setSocialAccounts, setSocialStatus, setTenantAnthropicKey, setTenantGeminiKey, toPublicConfig, updateSettings, rememberOwnerLang } from './settings.js';
+import { getSettings, getSettingsBySlug, getSocialAccounts, getSocialStatus, setCrawlStatus, setSocialAccounts, setSocialStatus, setTenantAnthropicKey, setTenantGeminiKey, toPublicConfig, updateSettings, rememberOwnerLang, rememberOwnerEmail } from './settings.js';
 import { catalogSummary, countProducts, createProduct, deleteAllProducts, deleteProduct, deleteProductsBySource, getProduct, importProducts, listProducts, parseImportBuffer, updateProduct } from './catalog.js';
 import { startCrawl, getCrawlProgress } from './crawler.js';
 import { defaultStarters } from './starters.js';
 import { buildAutoCover } from './cover.js';
 import { widgetStrings, tw, normalizeLang, reqLang, localizeStatus, errText, ownerLangOf } from './i18n.js';
 import { buildManifest, buildIcon, invalidateIcons, shortAppName, SERVICE_WORKER_JS } from './pwa.js';
+import { touchVisitor, getVisitor, clientIp } from './visitors.js';
+import { startDailyDigest, buildDigest } from './digest.js';
+import { addConversationSignals } from './store.js';
+import { sendClientEmail } from '../email.js';
+import { safeFetch } from '../safe_fetch.js';
 import { getVapid, saveSubscription, removeSubscription, countSubs, createPushJob, listPushJobs, cancelPushJob, pushesLast24h, startPushScheduler, PUSH_DAILY_LIMIT } from './push.js';
 import { getGeminiApiKey } from '../config.js';
 import { countPosts, deletePostsBySource } from './posts.js';
-import { getNotifyState, setNotifyToken, refreshNotifySubscribers, removeNotifySubscriber, sendNotifyTest, notifyOwnerTelegram, getPlatformBot, ensurePlatformWebhook, createLinkCode, handlePlatformUpdate, platformWebhookSecret } from './notify.js';
+import { getNotifyState, setNotifyToken, refreshNotifySubscribers, removeNotifySubscriber, sendNotifyTest, notifyOwnerTelegram, notifyOwnerEmail, emailConfigured, getPlatformBot, ensurePlatformWebhook, createLinkCode, handlePlatformUpdate, platformWebhookSecret } from './notify.js';
 import { getCommerceTelegramBotToken } from '../config.js';
 import { startSocialAnalysis, getSocialProgress, tiktokHandle, tgHandle, POST_LIMITS, type SocialSource } from './social.js';
 import { connectIg, igChallenge, igStatus, logoutIg } from '../igp_client.js';
@@ -40,6 +45,7 @@ import type { AgentEvent, LeadStatus } from './types.js';
 
 const router = Router();
 startPushScheduler();
+startDailyDigest();
 
 /** Текст ошибки на языке запроса (X-Lang кабинета / ?lang / Accept-Language). */
 const E = (req: Request, key: string, params?: Record<string, string | number>) => ({ error: tw(reqLang(req), key, params) });
@@ -433,7 +439,8 @@ router.get('/conversations/:id', async (req: AuthedRequest, res: Response) => {
   if (!c) return res.status(404).json(E(req, 'srv.dialog.notFound'));
   const messages = await listDisplayMessages(req.tenantId!, c.id);
   const leads = (await listLeads(req.tenantId!, { limit: 100 })).items.filter((l) => l.conversation_id === c.id);
-  return res.json({ conversation: c, messages, leads });
+  const [visitor, push] = await Promise.all([getVisitor(req.tenantId!, c.visitor_id), countSubs(req.tenantId!, c.id)]);
+  return res.json({ conversation: c, messages, leads, visitor, push });
 });
 
 // ── Push покупателю по диалогу: сколько устройств, отправить сейчас или по дате, история ──
@@ -459,6 +466,43 @@ router.post('/conversations/:id/push', async (req: AuthedRequest, res: Response)
 router.delete('/push-jobs/:id', async (req: AuthedRequest, res: Response) => {
   const ok = await cancelPushJob(req.tenantId!, req.params.id);
   return ok ? res.json({ ok: true }) : res.status(404).json(E(req, 'srv.notFound'));
+});
+
+// ── Пиксели владельца: проверка формата id и доступности скриптов (владение пикселем проверить нельзя) ──
+router.post('/pixels/check', async (req: AuthedRequest, res: Response) => {
+  const px = req.body?.pixels || {};
+  const probe = async (url: string): Promise<'reachable' | 'notFound' | 'network'> => {
+    try { const r = await safeFetch(url, { timeoutMs: 8_000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; VibeVoxCommerceBot/1.0)' } }); return r.ok ? 'reachable' : 'notFound'; } catch { return 'network'; }
+  };
+  const meta = String(px.meta || '').trim(); const tiktok = String(px.tiktok || '').trim(); const google = String(px.google || '').trim();
+  const results: Record<string, string> = {
+    meta: !meta ? 'empty' : !/^\d{10,20}$/.test(meta) ? 'invalid' : await probe(`https://www.facebook.com/tr/?id=${encodeURIComponent(meta)}&ev=PageView&noscript=1`),
+    tiktok: !tiktok ? 'empty' : !/^[A-Z0-9]{10,40}$/i.test(tiktok) ? 'invalid' : await probe(`https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=${encodeURIComponent(tiktok)}&lib=ttq`),
+    google: !google ? 'empty' : !/^(G|AW|GT|DC)-[A-Z0-9]{5,20}$/i.test(google) ? 'invalid' : await probe(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(google)}`),
+  };
+  return res.json({ results });
+});
+
+// ── Почта владельца: статус, тест, ежедневная сводка «сейчас» ──
+router.get('/notify/email', async (req: AuthedRequest, res: Response) => {
+  const s = await getSettings(req.tenantId!);
+  return res.json({ configured: emailConfigured(), email: s.owner_email || req.userEmail || null, enabled: s.email_notify !== false, digest: s.digest_enabled !== false });
+});
+router.post('/notify/email/test', async (req: AuthedRequest, res: Response) => {
+  const s = await getSettings(req.tenantId!);
+  const to = s.owner_email || req.userEmail || '';
+  if (!emailConfigured()) return res.status(503).json(E(req, 'srv.email.notConfigured'));
+  if (!to) return res.status(400).json(E(req, 'srv.email.noAddress'));
+  const lang = reqLang(req);
+  const r = await sendClientEmail(to, tw(lang, 'srv.email.testSubject'), tw(lang, 'srv.email.testText'), s.brand_name || 'Commerce Agents');
+  return r.ok ? res.json({ ok: true, to }) : res.status(502).json({ error: r.error });
+});
+router.post('/notify/digest', async (req: AuthedRequest, res: Response) => {
+  const s = await getSettings(req.tenantId!);
+  const d = await buildDigest({ tenant_id: req.tenantId!, brand_name: s.brand_name, currency: s.currency, language: s.language, owner_lang: s.owner_lang });
+  if (!d) return res.json({ ok: true, sent: 0 });
+  const [tg, mail] = await Promise.all([notifyOwnerTelegram(req.tenantId!, d.tg), notifyOwnerEmail(req.tenantId!, d.subject, d.tg.replace(/<[^>]+>/g, ''))]);
+  return res.json({ ok: true, telegram: tg, email: mail });
 });
 
 router.get('/leads', async (req: AuthedRequest, res: Response) => {
@@ -649,7 +693,12 @@ commercePublicRouter.post('/w/:slug/event', eventLimiter, async (req: Request, r
   const s = await getSettingsBySlug(req.params.slug);
   if (!s) return res.status(404).json({ error: 'not_found' });
   const kind = String(req.body?.kind || '');
-  if (!['card_click', 'add_to_cart', 'checkout_click', 'widget_open'].includes(kind)) return res.status(400).json({ error: 'bad_kind' });
+  if (!['card_click', 'add_to_cart', 'checkout_click', 'widget_open', 'open'].includes(kind)) return res.status(400).json({ error: 'bad_kind' });
+  if (kind === 'open') {
+    // Профиль посетителя без авторизации: устройство, язык, пояс, город по IP, источник, визиты, приложение.
+    void touchVisitor(s.tenant_id, String(req.body?.visitorId || ''), { client: req.body?.client, ip: clientIp(req as any), pageUrl: typeof req.body?.url === 'string' ? req.body.url.slice(0, 1000) : null, installed: !!req.body?.client?.standalone });
+    return res.json({ ok: true });
+  }
   const conversationId = typeof req.body?.conversationId === 'string' ? req.body.conversationId : null;
   if (conversationId) { const c = await getConversation(s.tenant_id, conversationId); if (!c) return res.json({ ok: true }); }
   await logEvent(s.tenant_id, kind as any, { conversationId, productId: typeof req.body?.productId === 'string' ? req.body.productId : null, payload: { source: 'widget' } });
@@ -675,6 +724,8 @@ commercePublicRouter.post('/w/:slug/lead', leadLimiter, async (req: Request, res
     + (reason ? tw(ol, 'srv.tg.leadTopic', { reason: esc(reason) }) : '') + (note ? tw(ol, 'srv.tg.leadNote', { note: esc(note) }) : '');
   sendOwnerNotification(s.tenant_id, leadText).catch(() => {});
   void notifyOwnerTelegram(s.tenant_id, leadText);
+  void notifyOwnerEmail(s.tenant_id, tw(ol, 'srv.email.leadSubject', { brand: s.brand_name || '' }), leadText.replace(/<[^>]+>/g, ''));
+  if (conv) void addConversationSignals(s.tenant_id, conv.id, ['lead'], { name, phone, email });
   return res.json({ ok: true, leadId: lead.id });
 });
 
@@ -692,6 +743,7 @@ commercePublicRouter.post('/w/:slug/purchase', eventLimiter, async (req: Request
   if (!convId) return res.json({ ok: true, attributed: false });
   const lead = await createLead(s.tenant_id, { conversationId: convId, kind: 'purchase', items, total: Number.isFinite(total) ? Math.round(total * 100) / 100 : null, currency: String(req.body?.currency || s.currency).slice(0, 8), contact: {}, note: req.body?.orderId ? `order ${String(req.body.orderId).slice(0, 80)}` : null });
   await logEvent(s.tenant_id, 'purchase', { conversationId: convId, payload: { leadId: lead.id, total: lead.total } });
+  void addConversationSignals(s.tenant_id, convId, ['purchase']);
   return res.json({ ok: true, attributed: true });
 });
 

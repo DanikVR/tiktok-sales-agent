@@ -32,7 +32,7 @@ const COLS = `tenant_id, slug, brand_name, assistant_name, brand_voice, greeting
   language, business_profile, policies, currency, site_url, checkout_url, platform, enabled, voice_enabled,
   proactive_enabled, (anthropic_key_encrypted IS NOT NULL AND anthropic_key_encrypted <> '') AS has_anthropic_key,
   (gemini_key_encrypted IS NOT NULL AND gemini_key_encrypted <> '') AS has_gemini_key,
-  shopping_model, merchant_model, crawl_status, share_title, share_description, share_cover_url, starters, agent_notes, owner_lang, app_name, created_at, updated_at`;
+  shopping_model, merchant_model, crawl_status, share_title, share_description, share_cover_url, starters, agent_notes, owner_lang, app_name, pixels, consent_enabled, privacy_url, owner_email, email_notify, digest_enabled, created_at, updated_at`;
 
 function mapRow(r: any): CommerceSettings {
   return {
@@ -64,6 +64,12 @@ function mapRow(r: any): CommerceSettings {
     agent_notes: r.agent_notes || '',
     owner_lang: r.owner_lang || null,
     app_name: r.app_name || null,
+    pixels: (typeof r.pixels === 'string' ? safeJson(r.pixels) : r.pixels) || null,
+    consent_enabled: !!r.consent_enabled,
+    privacy_url: r.privacy_url || null,
+    owner_email: r.owner_email || null,
+    email_notify: r.email_notify !== false,
+    digest_enabled: r.digest_enabled !== false,
     starters: (() => { const v = typeof r.starters === 'string' ? safeJson(r.starters) : r.starters; return Array.isArray(v) && v.length ? v.map(String).slice(0, 4) : null; })(),
     share_title: r.share_title || '',
     share_description: r.share_description || '',
@@ -109,7 +115,7 @@ export async function getSettingsBySlug(slug: string): Promise<CommerceSettings 
 }
 
 const EDITABLE: Array<keyof CommerceSettings> = [
-  'app_name',
+  'app_name', 'pixels', 'consent_enabled', 'privacy_url', 'email_notify', 'digest_enabled',
   'brand_name', 'assistant_name', 'brand_voice', 'greeting', 'accent', 'theme', 'logo_url', 'position', 'language',
   'business_profile', 'policies', 'currency', 'site_url', 'checkout_url', 'platform', 'enabled', 'voice_enabled',
   'proactive_enabled', 'shopping_model', 'merchant_model', 'share_title', 'share_description', 'share_cover_url', 'starters', 'agent_notes',
@@ -120,7 +126,7 @@ const LIMITS: Partial<Record<keyof CommerceSettings, number>> = {
   business_profile: 20_000, policies: 60_000, currency: 8, site_url: 500, checkout_url: 500, shopping_model: 80, merchant_model: 80,
   share_title: 120, share_description: 300, share_cover_url: 500, agent_notes: 6000,
 };
-const NULLABLE_URLS = new Set<string>(['site_url', 'checkout_url', 'logo_url', 'share_cover_url', 'shopping_model', 'merchant_model']);
+const NULLABLE_URLS = new Set<string>(['site_url', 'checkout_url', 'logo_url', 'share_cover_url', 'shopping_model', 'merchant_model', 'privacy_url']);
 
 export async function updateSettings(tenantId: string, patch: Partial<CommerceSettings>): Promise<CommerceSettings> {
   await getSettings(tenantId); // гарантируем строку
@@ -137,10 +143,17 @@ export async function updateSettings(tenantId: string, patch: Partial<CommerceSe
       if (key === 'theme' && !['light', 'dark', 'auto'].includes(v)) v = 'auto';
       if (key === 'position' && !['bottom-right', 'bottom-left'].includes(v)) v = 'bottom-right';
       if (key === 'platform' && !['shopify', 'woocommerce', 'magento', 'prestashop', 'opencart', 'squarespace', 'wix', 'bitrix', 'insales', 'tilda', 'other'].includes(v)) v = 'other';
-      if ((key === 'site_url' || key === 'checkout_url' || key === 'logo_url' || key === 'share_cover_url') && v && !/^(https?:\/\/|\/api\/uploads\/)/i.test(v)) v = null;
+      if ((key === 'site_url' || key === 'checkout_url' || key === 'logo_url' || key === 'share_cover_url' || key === 'privacy_url') && v && !/^(https?:\/\/|\/api\/uploads\/)/i.test(v)) v = null;
       if (v === '' && NULLABLE_URLS.has(key)) v = null;
     } else if (typeof v === 'boolean') {
       /* ok */
+    } else if (key === 'pixels' && (v === null || (v && typeof v === 'object'))) {
+      // Только id нужного формата; пустой набор — NULL.
+      const clean = (x: unknown, re: RegExp) => { const t = String(x || '').trim(); return re.test(t) ? t : ''; };
+      const px = v ? { meta: clean((v as any).meta, /^\d{10,20}$/), tiktok: clean((v as any).tiktok, /^[A-Z0-9]{10,40}$/i), google: clean((v as any).google, /^(G|AW|GT|DC)-[A-Z0-9]{5,20}$/i) } : null;
+      vals.push(px && (px.meta || px.tiktok || px.google) ? JSON.stringify(px) : null);
+      sets.push(`pixels = $${vals.length}::jsonb`);
+      continue;
     } else if (key === 'starters' && (v === null || Array.isArray(v))) {
       const list = Array.isArray(v) ? v.map((x) => String(x || '').trim().slice(0, 60)).filter(Boolean).slice(0, 4) : [];
       vals.push(list.length ? JSON.stringify(list) : null);
@@ -215,6 +228,9 @@ export async function setTenantGeminiKey(tenantId: string, rawKey: string | null
 export function toPublicConfig(s: CommerceSettings) {
   return {
     slug: s.slug,
+    pixels: s.pixels || null,
+    consentEnabled: !!s.consent_enabled,
+    privacyUrl: s.privacy_url || null,
     brandName: s.brand_name,
     assistantName: s.assistant_name,
     greeting: s.greeting,
@@ -268,4 +284,14 @@ export async function rememberOwnerLang(tenantId: string, raw: unknown): Promise
   ownerLangCache.set(tenantId, lang);
   if (isFallbackActive()) { const m = memSettings.get(tenantId); if (m) m.owner_lang = lang; return; }
   await pool.query(`UPDATE commerce_settings SET owner_lang = $2 WHERE tenant_id = $1 AND owner_lang IS DISTINCT FROM $2`, [tenantId, lang]).catch(() => {});
+}
+
+/** Запомнить почту владельца (из JWT при входе в кабинет) — для копий уведомлений и ежедневной сводки. */
+const ownerEmailCache = new Map<string, string>();
+export async function rememberOwnerEmail(tenantId: string, raw: unknown): Promise<void> {
+  const email = typeof raw === 'string' ? raw.trim().toLowerCase().slice(0, 200) : '';
+  if (!email || !/.+@.+\..+/.test(email) || ownerEmailCache.get(tenantId) === email) return;
+  ownerEmailCache.set(tenantId, email);
+  if (isFallbackActive()) { const m = memSettings.get(tenantId); if (m) m.owner_email = email; return; }
+  await pool.query(`UPDATE commerce_settings SET owner_email = $2 WHERE tenant_id = $1 AND owner_email IS DISTINCT FROM $2`, [tenantId, email]).catch(() => {});
 }

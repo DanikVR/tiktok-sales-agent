@@ -14,6 +14,7 @@ import { AGENT_CSS, ProductCards, Comparison, CheckoutCard, LeadForm, Suggestion
 interface PublicConfig {
   slug: string; brandName: string; assistantName: string; greeting: string; accent: string; theme: 'light' | 'dark' | 'auto'; logoUrl: string | null;
   language: string; currency: string; platform: string; checkoutUrl: string | null; siteUrl: string | null; enabled: boolean; voiceEnabled: boolean; ready: boolean;
+  pixels?: { meta?: string; tiktok?: string; google?: string } | null; consentEnabled?: boolean; privacyUrl?: string | null;
   shareTitle?: string; shareDescription?: string; shareCoverUrl?: string | null; shareUrl?: string; starters?: string[] | null; strings?: WidgetStrings | null; lang?: string;
 }
 
@@ -80,6 +81,34 @@ export default function CommerceWidgetPage({ hosted = false }: { hosted?: boolea
   const [installHidden, setInstallHidden] = useState<boolean>(() => { try { return Number(localStorage.getItem(`comag_install_hide_${slug}`) || 0) > Date.now(); } catch { return false; } });
   const [pushState, setPushState] = useState<'na' | 'idle' | 'on' | 'denied' | 'busy'>('na');
   const swRef = useRef<ServiceWorkerRegistration | null>(null);
+  // Профиль посетителя (устройство, язык, пояс, источник) — один раз за открытие; город сервер берёт по IP.
+  useEffect(() => {
+    if (!slug) return;
+    const inAppName = (ua.match(/Telegram|Instagram|FBAN|FBAV|FB_IAB|TikTok|Line\/|Snapchat/i) || [null])[0];
+    const client = { ua, lang: navigator.language, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, screen: `${window.screen.width}x${window.screen.height}`, standalone, inApp: inAppName, touch: 'ontouchstart' in window, referrer: document.referrer || '' };
+    fetch(`/api/commerce/w/${encodeURIComponent(slug)}/event`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'open', visitorId: visitorRef.current, client, url: window.location.href }) }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+  // Пиксели владельца и баннер согласия (только страница бота по ссылке).
+  const [consent, setConsent] = useState<'na' | 'pending' | 'granted' | 'denied'>('na');
+  useEffect(() => {
+    if (!hosted || !cfg) return;
+    const px = cfg.pixels; const has = !!(px && (px.meta || px.tiktok || px.google));
+    if (!cfg.consentEnabled) { if (has) loadPixels(px, visitorRef.current); setConsent(has ? 'granted' : 'na'); return; }
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(`comag_consent_${slug}`); } catch { /* ignore */ }
+    const [dec, ts] = (stored || '').split(':');
+    const fresh = ts && Date.now() - Number(ts) < 180 * 86_400_000;
+    if (dec === 'granted' && fresh) { if (has) loadPixels(px, visitorRef.current); setConsent('granted'); }
+    else if (dec === 'denied' && fresh) setConsent('denied');
+    else setConsent('pending');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hosted, cfg?.slug, cfg?.consentEnabled]);
+  const decide = (v: 'granted' | 'denied') => {
+    try { localStorage.setItem(`comag_consent_${slug}`, `${v}:${Date.now()}`); } catch { /* ignore */ }
+    setConsent(v);
+    if (v === 'granted') loadPixels(cfg?.pixels, visitorRef.current);
+  };
   useEffect(() => {
     if (!hosted) return;
     const onBip = (e: Event) => { e.preventDefault(); setInstallEvt(e); };
@@ -121,7 +150,7 @@ export default function CommerceWidgetPage({ hosted = false }: { hosted?: boolea
   };
 
   const post = (msg: any) => { try { window.parent?.postMessage({ type: 'comag', ...msg }, '*'); } catch { /* ignore */ } };
-  const track = (kind: string, productId?: string) => { fetch(`/api/commerce/w/${encodeURIComponent(slug)}/event`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, productId, conversationId: convRef.current }) }).catch(() => {}); };
+  const track = (kind: string, productId?: string) => { pixelEvent(PIXEL_EVENTS[kind], productId ? { content_ids: [productId], content_type: 'product' } : undefined); fetch(`/api/commerce/w/${encodeURIComponent(slug)}/event`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, productId, conversationId: convRef.current }) }).catch(() => {}); };
   const push = (b: NewBlock) => { const id = idRef.current++; setBlocks((prev) => [...prev, { ...(b as any), id }]); return id; };
 
   const send = useCallback(async (text: string) => {
@@ -164,7 +193,7 @@ export default function CommerceWidgetPage({ hosted = false }: { hosted?: boolea
   const onCheckout = (url: string | null) => { track('checkout_click'); const target = url || cfg?.checkoutUrl || cfg?.siteUrl; if (!openAsLink && target) post({ action: 'open', url: target }); };
   const onOpenPost = (p: PostCardData) => { track('card_click'); if (!openAsLink && p.url) post({ action: 'open', url: p.url }); };
   const onLead = async (v: { name: string; phone: string; email: string; note: string }) => {
-    try { const r = await fetch(`/api/commerce/w/${encodeURIComponent(slug)}/lead`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, conversationId: convRef.current, visitorId: visitorRef.current }) }); return r.ok; } catch { return false; }
+    try { const r = await fetch(`/api/commerce/w/${encodeURIComponent(slug)}/lead`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, conversationId: convRef.current, visitorId: visitorRef.current }) }); if (r.ok) pixelEvent('Lead'); return r.ok; } catch { return false; }
   };
 
   const speechSupported = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
@@ -262,7 +291,16 @@ export default function CommerceWidgetPage({ hosted = false }: { hosted?: boolea
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></svg>
         </button>
       </form>
-      <div className="cg-footer">{s.poweredBy}</div>
+      {hosted && consent === 'pending' ? (
+        <div className="cg-consent" role="dialog" aria-live="polite">
+          <div className="cg-consent-text">{s.consent?.text}{view?.privacyUrl ? <> <a href={view.privacyUrl} target="_blank" rel="noreferrer">{s.consent?.policy}</a></> : null}</div>
+          <div className="cg-consent-actions">
+            <button type="button" className="cg-consent-btn" onClick={() => decide('denied')}>{s.consent?.decline}</button>
+            <button type="button" className="cg-consent-btn cg-consent-accept" style={{ background: accent }} onClick={() => decide('granted')}>{s.consent?.accept}</button>
+          </div>
+        </div>
+      ) : null}
+      <div className="cg-footer">{s.poweredBy}{hosted && view?.consentEnabled && (consent === 'granted' || consent === 'denied') ? <> · <button type="button" className="cg-link" onClick={() => setConsent('pending')}>{s.consent?.settings}</button></> : null}</div>
       {toast ? <div className="cg-toast">{toast}</div> : null}
     </div>
   );
@@ -278,6 +316,12 @@ const CSS = `
 .cg-install-x{border:0;background:transparent;color:var(--cg-muted);font-size:18px;line-height:1;cursor:pointer;padding:4px}
 .cg-bell{border:1px solid var(--cg-border);background:var(--cg-surface);border-radius:999px;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;margin-inline-start:6px;flex-shrink:0}
 .cg-bell-on{border-color:transparent;opacity:.85;cursor:default}
+.cg-consent{margin:8px 12px;padding:10px 12px;border-radius:14px;background:var(--cg-surface);border:1px solid var(--cg-border);color:var(--cg-text);font-size:12px;line-height:1.35}
+.cg-consent a{color:inherit;text-decoration:underline}
+.cg-consent-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.cg-consent-btn{border:1px solid var(--cg-border);background:transparent;color:var(--cg-text);border-radius:10px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.cg-consent-accept{border-color:transparent;color:#fff}
+.cg-link{border:0;background:transparent;color:inherit;text-decoration:underline;font:inherit;cursor:pointer;padding:0}
 .cg-hosted{position:relative;min-height:100dvh;max-width:560px;margin:0 auto;box-shadow:0 0 0 1px var(--cg-border)}
 .cg-header{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--cg-border);background:var(--cg-bg)}
 .cg-logo{width:38px;height:38px;border-radius:12px;object-fit:cover;flex-shrink:0}
@@ -325,4 +369,48 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
   const out = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
+}
+
+// ── Пиксели рекламных сетей на странице бота: загружаются один раз и только после согласия (если баннер включён) ──
+type Pixels = { meta?: string; tiktok?: string; google?: string } | null | undefined;
+const PIXEL_EVENTS: Record<string, string | undefined> = { card_click: 'ViewContent', add_to_cart: 'AddToCart', checkout_click: 'InitiateCheckout' };
+const TT_EVENTS: Record<string, string> = { ViewContent: 'ViewContent', AddToCart: 'AddToCart', InitiateCheckout: 'InitiateCheckout', Lead: 'SubmitForm' };
+const GA_EVENTS: Record<string, string> = { ViewContent: 'view_item', AddToCart: 'add_to_cart', InitiateCheckout: 'begin_checkout', Lead: 'generate_lead' };
+function addScript(src: string): void { const el = document.createElement('script'); el.async = true; el.src = src; document.head.appendChild(el); }
+function loadPixels(px: Pixels, visitorId: string | null | undefined): void {
+  if (!px || typeof window === 'undefined') return;
+  const w = window as any;
+  if (w.__comagPixels) return;
+  w.__comagPixels = true;
+  try {
+    if (px.meta) {
+      if (!w.fbq) { const n: any = function () { n.callMethod ? n.callMethod.apply(n, arguments) : n.queue.push(arguments); }; w.fbq = n; w._fbq = n; n.push = n; n.loaded = true; n.version = '2.0'; n.queue = []; addScript('https://connect.facebook.net/en_US/fbevents.js'); }
+      w.fbq('init', px.meta, visitorId ? { external_id: visitorId } : undefined);
+      w.fbq('track', 'PageView');
+    }
+    if (px.tiktok) {
+      if (!w.ttq) {
+        const ttq: any = []; w.TiktokAnalyticsObject = 'ttq'; w.ttq = ttq;
+        ttq.methods = ['page', 'track', 'identify', 'instances', 'debug', 'on', 'off', 'once', 'ready', 'alias', 'group', 'enableCookie', 'disableCookie'];
+        ttq.setAndDefer = (t: any, e: string) => { t[e] = function () { t.push([e].concat(Array.prototype.slice.call(arguments, 0))); }; };
+        for (const m of ttq.methods) ttq.setAndDefer(ttq, m);
+        ttq.load = (e: string) => { ttq._i = ttq._i || {}; ttq._i[e] = []; ttq._i[e]._u = 'https://analytics.tiktok.com/i18n/pixel/events.js'; ttq._t = ttq._t || {}; ttq._t[e] = +new Date(); ttq._o = ttq._o || {}; ttq._o[e] = {}; addScript(`https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=${encodeURIComponent(e)}&lib=ttq`); };
+        ttq.load(px.tiktok);
+      }
+      w.ttq.page();
+    }
+    if (px.google) {
+      w.dataLayer = w.dataLayer || [];
+      if (!w.gtag) { w.gtag = function () { w.dataLayer.push(arguments); }; addScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(px.google)}`); w.gtag('js', new Date()); }
+      w.gtag('config', px.google);
+    }
+  } catch { /* пиксели не должны ломать чат */ }
+}
+function pixelEvent(name: string | undefined, params?: Record<string, unknown>): void {
+  if (!name || typeof window === 'undefined') return;
+  const w = window as any;
+  if (!w.__comagPixels) return;
+  try { if (w.fbq) w.fbq('track', name, params || {}); } catch { /* ignore */ }
+  try { if (w.ttq && TT_EVENTS[name]) w.ttq.track(TT_EVENTS[name], params || {}); } catch { /* ignore */ }
+  try { if (w.gtag && GA_EVENTS[name]) w.gtag('event', GA_EVENTS[name], params || {}); } catch { /* ignore */ }
 }

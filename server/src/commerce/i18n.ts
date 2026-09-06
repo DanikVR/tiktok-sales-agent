@@ -60,7 +60,7 @@ export function widgetStrings(lang: string): Record<string, unknown> {
   const own = l === 'en' ? {} : ((get(loadFile(l), 'w') as Record<string, unknown>) || {});
   // Глубокое слияние на два уровня (progress.*, starters.*)
   const out: Record<string, unknown> = { ...base, ...own };
-  for (const k of ['progress', 'starters', 'install', 'push']) out[k] = { ...((base as any)[k] || {}), ...((own as any)[k] || {}) };
+  for (const k of ['progress', 'starters', 'install', 'push', 'consent']) out[k] = { ...((base as any)[k] || {}), ...((own as any)[k] || {}) };
   return out;
 }
 

@@ -9,7 +9,7 @@ import TelegramNotifyCard from './TelegramNotifyCard';
 import SiteAnalyzePanel from './SiteAnalyzePanel';
 import SocialImportCard from './SocialImportCard';
 
-const SECTIONS = ['sources', 'business', 'store', 'keys', 'telegram', 'danger'];
+const SECTIONS = ['sources', 'business', 'store', 'keys', 'telegram', 'pixels', 'danger'];
 
 const CURRENCY_GROUPS: Array<{ key: 'eu' | 'europe' | 'cis' | 'world'; items: Array<[string, string]> }> = [
   { key: 'eu', items: [['EUR', 'Euro'], ['PLN', 'Złoty'], ['CZK', 'Koruna'], ['HUF', 'Forint'], ['RON', 'Leu'], ['BGN', 'Lev'], ['SEK', 'Krona'], ['DKK', 'Krone']] },
@@ -95,6 +95,10 @@ export default function CommerceSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [toast, show] = useToast();
   const [confirmNode, askConfirm] = useConfirm();
+  const [pxCheck, setPxCheck] = useState<Record<string, string> | null>(null);
+  const [pxBusy, setPxBusy] = useState(false);
+  const checkPixels = async () => { setPxBusy(true); try { const r = await api('/api/commerce/pixels/check', { method: 'POST', body: JSON.stringify({ pixels: s.pixels || {} }) }); setPxCheck(r.results); } catch (e: any) { show(e?.message, 'error'); } setPxBusy(false); };
+  const patchPx = (k: 'meta' | 'tiktok' | 'google', v: string) => setS((prev: any) => ({ ...prev, pixels: { ...(prev.pixels || {}), [k]: v } }));
   const location = useLocation();
   const navigate = useNavigate();
   const jump = (id: string) => { navigate(`/commerce/settings#${id}`); window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30); };
@@ -115,7 +119,7 @@ export default function CommerceSettingsPage() {
 
   const save = async () => {
     setSaving(true);
-    try { const r = await api('/api/commerce/settings', { method: 'PUT', body: JSON.stringify({ business_profile: s.business_profile, policies: s.policies, currency: s.currency, site_url: s.site_url, checkout_url: s.checkout_url, platform: s.platform, shopping_model: s.shopping_model, merchant_model: s.merchant_model }) }); setS(r.settings); show(t('common.saved')); } catch (e: any) { show(e?.message, 'error'); }
+    try { const r = await api('/api/commerce/settings', { method: 'PUT', body: JSON.stringify({ email_notify: s.email_notify !== false, digest_enabled: s.digest_enabled !== false, pixels: s.pixels || null, consent_enabled: !!s.consent_enabled, privacy_url: s.privacy_url || null, business_profile: s.business_profile, policies: s.policies, currency: s.currency, site_url: s.site_url, checkout_url: s.checkout_url, platform: s.platform, shopping_model: s.shopping_model, merchant_model: s.merchant_model }) }); setS(r.settings); show(t('common.saved')); } catch (e: any) { show(e?.message, 'error'); }
     setSaving(false);
   };
   const wipe = async () => { if (!(await askConfirm({ title: t('settings.wipeTitle'), message: t('settings.wipeText'), confirmText: t('settings.wipeConfirm'), danger: true }))) return; try { const r = await api('/api/commerce/products?confirm=all', { method: 'DELETE' }); show(t('settings.wiped', { n: r.deleted })); } catch (e: any) { show(e?.message, 'error'); } };
@@ -191,8 +195,26 @@ export default function CommerceSettingsPage() {
       </Card>
 
       </div>
-      <div id="telegram" className="scroll-mt-4"><TelegramNotifyCard /></div>
+      <div id="telegram" className="scroll-mt-4 space-y-5"><TelegramNotifyCard /><EmailNotifyCard s={s} patch={patch} /></div>
 
+      <div id="pixels" className="scroll-mt-4">
+      <Card title={t('settings.pixels')} right={<Btn variant="ghost" onClick={() => void checkPixels()} disabled={pxBusy}>{pxBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} {t('settings.pixelsCheck')}</Btn>}>
+        <div className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>{t('settings.pixelsHint')}</div>
+        <div className="grid sm:grid-cols-3 gap-3">
+          {([['meta', 'pixelMeta', 'pixelMetaHint', '1234567890123456'], ['tiktok', 'pixelTiktok', 'pixelTiktokHint', 'C1A2B3C4D5E6F7G8H9'], ['google', 'pixelGoogle', 'pixelGoogleHint', 'G-XXXXXXXXXX']] as const).map(([k, label, hint, ph]) => (
+            <Field key={k} label={t(`settings.${label}`)} hint={pxCheck?.[k] ? `${t(`settings.pixelsStatus.${pxCheck[k]}`)}` : t(`settings.${hint}`)}>
+              <Input value={s.pixels?.[k] || ''} onChange={(e) => patchPx(k, e.target.value.trim())} placeholder={ph} autoComplete="off" style={pxCheck?.[k] ? { borderColor: pxCheck[k] === 'reachable' ? '#10b981' : pxCheck[k] === 'empty' ? undefined : '#ef4444' } : undefined} />
+            </Field>
+          ))}
+        </div>
+        <div className="mt-5 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+          <div className="text-[11px] font-600 uppercase mb-1.5" style={{ color: 'var(--text-muted)', letterSpacing: '0.06em' }}>{t('settings.consent')}</div>
+          <div className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>{t('settings.consentHint')}</div>
+          <label className="flex items-center gap-2 text-sm mb-3" style={{ color: 'var(--text-primary)' }}><input type="checkbox" checked={!!s.consent_enabled} onChange={(e) => patch({ consent_enabled: e.target.checked })} /> {t('settings.consentEnabled')}</label>
+          <Field label={t('settings.privacyUrl')} hint={t('settings.privacyUrlHint')}><Input value={s.privacy_url || ''} onChange={(e) => patch({ privacy_url: e.target.value })} placeholder="https://your-shop.com/privacy" inputMode="url" autoComplete="off" /></Field>
+        </div>
+      </Card>
+      </div>
       <div id="danger" className="scroll-mt-4">
       <Card title={t('settings.danger')}>
         <Btn variant="danger" onClick={() => void wipe()}><Trash2 size={15} /> {t('settings.wipe')}</Btn>
@@ -201,5 +223,24 @@ export default function CommerceSettingsPage() {
       </div>
       </div>
     </div>
+  );
+}
+
+/** Письма владельцу: адрес (с последнего входа), состояние SMTP, тест, флаги дублирования и сводки. */
+function EmailNotifyCard({ s, patch }: { s: any; patch: (p: any) => void }) {
+  const { t } = useTranslation('commerce');
+  const [st, setSt] = useState<any>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [toast, show] = useToast();
+  useEffect(() => { api('/api/commerce/notify/email').then(setSt).catch(() => setSt({ configured: false, email: null })); }, []);
+  const test = async () => { setBusy('test'); try { const r = await api('/api/commerce/notify/email/test', { method: 'POST' }); show(t('settings.emailTestOk', { to: r.to })); } catch (e: any) { show(e?.message, 'error'); } setBusy(null); };
+  const digest = async () => { setBusy('digest'); try { const r = await api('/api/commerce/notify/digest', { method: 'POST' }); show(t('settings.digestSent', { tg: r.telegram ?? 0, mail: r.email ?? 0 })); } catch (e: any) { show(e?.message, 'error'); } setBusy(null); };
+  return (
+    <Card title={t('settings.emailTitle')} right={<div className="flex gap-2"><Btn variant="ghost" onClick={() => void digest()} disabled={!!busy}>{busy === 'digest' ? <Loader2 size={14} className="animate-spin" /> : null} {t('settings.digestNow')}</Btn><Btn variant="ghost" onClick={() => void test()} disabled={!!busy || !st?.configured || !st?.email}>{busy === 'test' ? <Loader2 size={14} className="animate-spin" /> : null} {t('settings.emailTest')}</Btn></div>}>
+      {toast}
+      <div className="text-sm mb-3" style={{ color: 'var(--text-primary)' }}>{!st ? '…' : !st.configured ? t('settings.emailNone') : st.email ? t('settings.emailStatus', { email: st.email }) : t('settings.emailNoAddress')}</div>
+      <label className="flex items-center gap-2 text-sm mb-2" style={{ color: 'var(--text-primary)' }}><input type="checkbox" checked={s.email_notify !== false} onChange={(e) => patch({ email_notify: e.target.checked })} /> {t('settings.emailNotify')}</label>
+      <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-primary)' }}><input type="checkbox" checked={s.digest_enabled !== false} onChange={(e) => patch({ digest_enabled: e.target.checked })} /> {t('settings.digest')}</label>
+    </Card>
   );
 }

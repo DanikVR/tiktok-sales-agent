@@ -249,5 +249,20 @@ CREATE TABLE IF NOT EXISTS commerce_push_jobs (id UUID PRIMARY KEY DEFAULT gen_r
 -- commerce_push_jobs.idx
 CREATE INDEX IF NOT EXISTS commerce_push_jobs_due_idx ON commerce_push_jobs (status, send_at);
 
+-- commerce_settings.pixels
+ALTER TABLE commerce_settings ADD COLUMN IF NOT EXISTS pixels JSONB;
+
+-- commerce_settings.consent
+ALTER TABLE commerce_settings ADD COLUMN IF NOT EXISTS consent_enabled BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS privacy_url TEXT;
+
+-- commerce_conversations.intent
+ALTER TABLE commerce_conversations ADD COLUMN IF NOT EXISTS intent VARCHAR(8) NOT NULL DEFAULT 'cold', ADD COLUMN IF NOT EXISTS signals JSONB NOT NULL DEFAULT '[]'::jsonb, ADD COLUMN IF NOT EXISTS contact JSONB;
+
+-- commerce_settings.owner_email
+ALTER TABLE commerce_settings ADD COLUMN IF NOT EXISTS owner_email TEXT, ADD COLUMN IF NOT EXISTS email_notify BOOLEAN NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS digest_sent_on DATE;
+
+-- commerce_visitors.table
+CREATE TABLE IF NOT EXISTS commerce_visitors (tenant_id VARCHAR(64) NOT NULL, visitor_id VARCHAR(64) NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(), visits INT NOT NULL DEFAULT 1, client JSONB NOT NULL DEFAULT '{}'::jsonb, geo JSONB, source TEXT, installed BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY (tenant_id, visitor_id));
+
 -- commerce_tg_links.table
 CREATE TABLE IF NOT EXISTS commerce_tg_links (code VARCHAR(32) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), used_at TIMESTAMPTZ);

@@ -27,7 +27,7 @@ const NAV = [
   { to: '/commerce/settings', icon: Settings, key: 'nav.settings' },
 ];
 /** Подпункты «Настроек» — быстрый переход к разделам страницы (якоря). */
-const SETTINGS_SECTIONS = ['sources', 'business', 'store', 'keys', 'telegram', 'danger'];
+const SETTINGS_SECTIONS = ['sources', 'business', 'store', 'keys', 'telegram', 'pixels', 'danger'];
 
 export default function CommerceLayout() {
   const { t } = useTranslation('commerce');

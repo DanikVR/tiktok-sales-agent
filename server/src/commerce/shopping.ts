@@ -12,7 +12,9 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { runAgentTurn, type TurnUsage } from './agent.js';
 import { countPosts, getPostsByIds, searchPosts } from './posts.js';
-import { notifyOwnerTelegram } from './notify.js';
+import { notifyOwnerTelegram, notifyOwnerEmail, publicBaseUrl } from './notify.js';
+import { detectSignals } from './intent.js';
+import { addConversationSignals } from './store.js';
 import { tw, ownerLangOf } from './i18n.js';
 import { STOREFRONT_FENCE, sanitizeChips } from './fence.js';
 import { buildShoppingSystem, buildShoppingContext, SHOPPING_SKILLS } from './prompts.js';
@@ -166,6 +168,7 @@ export async function runShoppingTurn(input: ShoppingTurnInput): Promise<Shoppin
         if (allowed <= 0) return { result: `This item is already at the per-item limit of ${MAX_QTY_PER_ITEM}.`, isError: true };
         if (existing) existing.quantity += allowed;
         else cart.items.push({ product_id: p.id, title: p.title, price: p.price, quantity: allowed, image_url: p.image_url, url: p.url, option_values: p.option_values });
+        void addConversationSignals(tenantId, conv!.id, ['cart']);
         await saveConversationState(conv!, { cart, seen_ids: Array.from(seen) });
         void logEvent(tenantId, 'add_to_cart', { conversationId: conv!.id, productId: p.id, payload: { source: 'agent', quantity: allowed } });
         const capped = allowed < requested ? ` (capped at the per-item limit of ${MAX_QTY_PER_ITEM})` : '';
@@ -239,7 +242,7 @@ export async function runShoppingTurn(input: ShoppingTurnInput): Promise<Shoppin
         const data = { leadId: lead.id, items: cart.items, subtotal: subtotal(cart), currency: cart.currency, note: STOREFRONT_FENCE.sanitizeText(String(args.note || ''), 300), checkoutUrl: settings.checkout_url || settings.site_url || null, platform: settings.platform };
         components.push({ component: 'checkout', data });
         void logEvent(tenantId, 'checkout_staged', { conversationId: conv!.id, payload: { total: subtotal(cart), lines: cart.items.length } });
-        void notifyOwnerTelegram(tenantId, tw(ownerLangOf(settings), 'srv.tg.order', { brand: (settings.brand_name || '').replace(/[<>&]/g, ''), items: cart.items.map((i) => `• ${String(i.title).replace(/[<>&]/g, '')} × ${i.quantity}`).join('\n'), total: subtotal(cart), currency: cart.currency }));
+        { const orderText = tw(ownerLangOf(settings), 'srv.tg.order', { brand: (settings.brand_name || '').replace(/[<>&]/g, ''), items: cart.items.map((i) => `• ${String(i.title).replace(/[<>&]/g, '')} × ${i.quantity}`).join('\n'), total: subtotal(cart), currency: cart.currency }); void notifyOwnerTelegram(tenantId, orderText); void notifyOwnerEmail(tenantId, tw(ownerLangOf(settings), 'srv.email.orderSubject', { brand: settings.brand_name || '' }), orderText.replace(/<[^>]+>/g, '')); void addConversationSignals(tenantId, conv!.id, ['checkout']); }
         return { result: 'Checkout summary staged; the customer confirms it on the store\'s own checkout. Nothing was ordered or charged. Add one sentence with what to check, then present_suggestions.', events: [{ type: 'component', component: 'checkout', data }] };
       }
       case 'search_posts': {
@@ -297,6 +300,20 @@ export async function runShoppingTurn(input: ShoppingTurnInput): Promise<Shoppin
 
   const usage = { input: conv.usage.input + result.usage.input, output: conv.usage.output + result.usage.output, cache_read: conv.usage.cache_read + result.usage.cache_read, cache_write: conv.usage.cache_write + result.usage.cache_write };
   await appendTurnMessages(tenantId, conv.id, conv.turn_count + 1, result.newMessages, { userText: userMessage, assistantText: result.text, components });
+  // Сигналы покупателя из текста («куплю», «перезвоните», телефон/email) → статус клиента; впервые «горячий» → алерт владельцу.
+  try {
+    const det = detectSignals(input.message);
+    if (det.signals.length) {
+      const r = await addConversationSignals(tenantId, conv.id, det.signals, det.contact, input.message);
+      if (r.becameHot) {
+        const ol = ownerLangOf(settings);
+        const esc = (t: string) => t.replace(/[<>&]/g, '');
+        const hotText = tw(ol, 'srv.tg.hot', { brand: esc(settings.brand_name || ''), text: esc(String(input.message).slice(0, 140)), url: `${publicBaseUrl()}/commerce/dialogs/${conv.id}` });
+        void notifyOwnerTelegram(tenantId, hotText);
+        void notifyOwnerEmail(tenantId, tw(ol, 'srv.email.hotSubject', { brand: settings.brand_name || '' }), hotText.replace(/<[^>]+>/g, ''));
+      }
+    }
+  } catch { /* сигналы не должны ломать ответ */ }
   await saveConversationState(conv, { cart, seen_ids: Array.from(seen), page_url: input.page?.url || undefined, usage, message_count_add: 2, turn_add: 1 });
   return { conversationId: conv.id, text: result.text, usage: result.usage };
 }

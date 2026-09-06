@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Loader2, ChevronRight, Search, Bell } from 'lucide-react';
+import { ArrowLeft, Loader2, ChevronRight, Search, Bell, Flame } from 'lucide-react';
 import { api, fmtDate, fmtMoney } from './api';
 import { Card, Empty, CopyInline, Input, Btn, Textarea, useToast } from './ui';
 import { AGENT_CSS, ProductCards, Comparison, CheckoutCard, Suggestions, PostCards, strings } from '../../components/commerce/AgentComponents';
@@ -48,6 +48,7 @@ function DialogList() {
                 </div>
                 {c.cart?.items?.length ? <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>🛒 {c.cart.items.length}</span> : null}
                 {c.lead_count ? <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(16,185,129,.12)', color: '#10b981' }}>{t('dialogs.leadsN', { n: c.lead_count })}</span> : null}
+                {c.intent === 'hot' || c.contact ? <span title={t('dialogs.clientBadge')} className="flex-shrink-0" style={{ color: '#ef4444' }}><Flame size={14} /></span> : null}
                 {c.push_count ? <span title={t('dialogs.pushable')} className="flex-shrink-0" style={{ color: '#f59e0b' }}><Bell size={14} /></span> : null}
                 <ChevronRight size={16} className="flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
               </Link>
@@ -102,7 +103,8 @@ function DialogView({ id }: { id: string }) {
             {!data.messages.length ? <Empty>{t('dialogs.noMessages')}</Empty> : null}
           </div>
         </Card>
-        <div className="space-y-3">
+        {/* Правая колонка (диалог, корзина, заявки, push) прилипает к верху при прокрутке переписки. */}
+        <div className="space-y-3 lg:sticky lg:top-0 lg:max-h-[calc(100dvh-1rem)] lg:overflow-y-auto">
           <Card title={t('dialogs.info')}>
             <dl className="text-sm space-y-1" style={{ color: 'var(--text-primary)' }}>
               <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>{t('dialogs.started')}</dt><dd>{fmtDate(c.started_at)}</dd></div>
@@ -111,9 +113,11 @@ function DialogView({ id }: { id: string }) {
               <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>{t('dialogs.tokens')}</dt><dd>{(c.usage?.input || 0) + (c.usage?.output || 0)} <span style={{ color: 'var(--text-muted)' }}>({t('dialogs.cache', { n: c.usage?.cache_read || 0 })})</span></dd></div>
             </dl>
           </Card>
+          <VisitorCard visitor={data.visitor} push={Number(data.push || 0)} />
           <Card title={t('dialogs.cart')}>
             {c.cart?.items?.length ? <ul className="text-sm space-y-1">{c.cart.items.map((i: any) => <li key={i.product_id} className="flex justify-between gap-2"><span className="truncate" style={{ color: 'var(--text-primary)' }}>{i.title} × {i.quantity}</span><span style={{ color: 'var(--text-muted)' }}>{fmtMoney(i.price * i.quantity, c.cart.currency)}</span></li>)}</ul> : <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('dialogs.cartEmpty')}</div>}
           </Card>
+          <ClientCard c={c} leads={data.leads || []} />
           <Card title={t('dialogs.leads')}>
             {data.leads?.length ? <ul className="text-sm space-y-2">{data.leads.map((l: any) => <li key={l.id} style={{ color: 'var(--text-primary)' }}><b>{t(`leads.kind.${l.kind}`)}</b> · {t(`leads.status.${l.status}`)}{l.total != null ? ` · ${fmtMoney(l.total, l.currency)}` : ''}{l.contact?.phone ? <> · <CopyInline text={l.contact.phone} /></> : null}{l.contact?.email ? <> · <CopyInline text={l.contact.email} /></> : null}</li>)}</ul> : <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('dialogs.leadsNone')}</div>}
           </Card>
@@ -176,6 +180,68 @@ function PushCard({ id }: { id: string }) {
           ))}
         </ul>
       ) : null}
+    </Card>
+  );
+}
+
+/** Покупатель без авторизации: устройство и браузер из User-Agent, язык, пояс, город по IP, источник, визиты, приложение, push. */
+function VisitorCard({ visitor, push }: { visitor: any; push: number }) {
+  const { t } = useTranslation('commerce');
+  if (!visitor) return null;
+  const ua = String(visitor.client?.ua || '');
+  const isTablet = /iPad|Tablet/i.test(ua) || (/Android/i.test(ua) && !/Mobile/i.test(ua));
+  const isPhone = /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua);
+  const os = /iPhone|iPad|iPod/i.test(ua) ? 'iOS' : /Android/i.test(ua) ? 'Android' : /Windows/i.test(ua) ? 'Windows' : /Mac OS/i.test(ua) ? 'macOS' : /Linux/i.test(ua) ? 'Linux' : '';
+  const browser = visitor.client?.inApp ? t('dialogs.visitor.inApp', { app: visitor.client.inApp }) : /Edg\//i.test(ua) ? 'Edge' : /OPR\//i.test(ua) ? 'Opera' : /Chrome\//i.test(ua) ? 'Chrome' : /Safari\//i.test(ua) ? 'Safari' : /Firefox\//i.test(ua) ? 'Firefox' : '';
+  const device = `${isTablet ? t('dialogs.visitor.tablet') : isPhone ? t('dialogs.visitor.phone') : t('dialogs.visitor.desktop')}${os ? ` · ${os}` : ''}`;
+  const city = [visitor.geo?.city, visitor.geo?.country].filter(Boolean).join(', ');
+  const rows: Array<[string, string]> = [
+    [t('dialogs.visitor.device'), ua ? device : t('dialogs.visitor.unknown')],
+    [t('dialogs.visitor.browser'), browser || t('dialogs.visitor.unknown')],
+    [t('dialogs.visitor.lang'), visitor.client?.lang || t('dialogs.visitor.unknown')],
+    [t('dialogs.visitor.tz'), visitor.client?.tz || visitor.geo?.tz || t('dialogs.visitor.unknown')],
+    [t('dialogs.visitor.city'), city || t('dialogs.visitor.unknown')],
+    [t('dialogs.visitor.source'), visitor.source || t('dialogs.visitor.unknown')],
+    [t('dialogs.visitor.visits'), String(visitor.visits || 1)],
+    [t('dialogs.visitor.installed'), visitor.installed ? t('dialogs.visitor.installedYes') : t('dialogs.visitor.installedNo')],
+    [t('dialogs.visitor.push'), push > 0 ? t('dialogs.visitor.pushOn') : t('dialogs.visitor.pushOff')],
+  ];
+  return (
+    <Card title={t('dialogs.visitor.title')}>
+      <dl className="text-sm space-y-1" style={{ color: 'var(--text-primary)' }}>
+        {rows.map(([k, v]) => <div key={k} className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>{k}</dt><dd className="text-right truncate max-w-[170px]" title={v}>{v}</dd></div>)}
+      </dl>
+    </Card>
+  );
+}
+
+/** Клиент: статус по сигналам (готов к покупке / интересуется / смотрит), оставленные данные, список сигналов. */
+function ClientCard({ c, leads }: { c: any; leads: any[] }) {
+  const { t } = useTranslation('commerce');
+  const intent: string = c.intent || 'cold';
+  const contact: Record<string, string> = { ...(c.contact || {}) };
+  for (const l of leads) for (const k of ['name', 'phone', 'email']) if (l.contact?.[k] && !contact[k]) contact[k] = l.contact[k];
+  const signals: any[] = Array.isArray(c.signals) ? c.signals : [];
+  const pill = intent === 'hot' ? { background: 'rgba(239,68,68,.12)', color: '#ef4444' } : intent === 'warm' ? { background: 'rgba(245,158,11,.12)', color: '#f59e0b' } : { background: 'var(--bg-tertiary)', color: 'var(--text-muted)' };
+  return (
+    <Card title={t('dialogs.client.title')} right={<span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={pill}>{intent === 'hot' ? <Flame size={12} /> : null}{t(`dialogs.client.${intent}`)}</span>}>
+      {contact.name || contact.phone || contact.email ? (
+        <div className="text-sm mb-2 flex flex-wrap gap-x-3 gap-y-1" style={{ color: 'var(--text-primary)' }}>
+          {contact.name ? <span className="font-600">{contact.name}</span> : null}
+          {contact.phone ? <CopyInline text={contact.phone} /> : null}
+          {contact.email ? <CopyInline text={contact.email} /> : null}
+        </div>
+      ) : <div className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>{t('dialogs.client.noContact')}</div>}
+      {signals.length ? (
+        <ul className="text-xs space-y-1">
+          {signals.slice(-8).reverse().map((sg, i) => (
+            <li key={i} className="flex justify-between gap-2">
+              <span style={{ color: 'var(--text-primary)' }}>{t(`dialogs.client.signal.${sg.k}`, { defaultValue: sg.k })}{sg.text ? <span style={{ color: 'var(--text-muted)' }}> — «{sg.text}»</span> : null}</span>
+              <span className="whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{fmtDate(sg.at)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('dialogs.client.noSignals')}</div>}
     </Card>
   );
 }

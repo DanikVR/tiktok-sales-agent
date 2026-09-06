@@ -92,6 +92,15 @@ export interface CommerceSettings {
   owner_lang?: string | null;
   /** Имя приложения под иконкой на телефоне покупателя (PWA), до 12 знаков; пусто — первое слово названия. */
   app_name?: string | null;
+  /** Пиксели владельца для страницы бота (/c/:slug): Meta Pixel, TikTok Pixel, Google (G-/AW-). */
+  pixels?: { meta?: string; tiktok?: string; google?: string } | null;
+  /** Баннер согласия на cookie/пиксели (ЕС/США) и ссылка на политику конфиденциальности. */
+  consent_enabled?: boolean;
+  privacy_url?: string | null;
+  /** Почта владельца (с последнего входа в кабинет) — копии уведомлений и ежедневная сводка. */
+  owner_email?: string | null;
+  email_notify?: boolean;
+  digest_enabled?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -146,6 +155,10 @@ export interface Conversation {
   message_count: number;
   turn_count: number;
   usage: { input: number; output: number; cache_read: number; cache_write: number };
+  /** Статус клиента по сигналам (intent.ts): hot — готов к покупке / оставил контакт, warm — интересуется. */
+  intent?: 'cold' | 'warm' | 'hot';
+  signals?: Array<{ k: string; at: string; text?: string }>;
+  contact?: { name?: string; phone?: string; email?: string } | null;
   started_at: string;
   last_at: string;
 }

@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { intentOf, type Signal } from './intent.js';
 import pool, { isFallbackActive } from '../db.js';
 import type { Cart, Conversation, Lead, LeadKind, LeadStatus, StagedChange, ChangeKind, ChangeItem } from './types.js';
 
@@ -25,6 +26,7 @@ function mapConversation(r: any): Conversation {
     message_count: Number(r.message_count || 0), turn_count: Number(r.turn_count || 0),
     usage: jsonb(r.usage, { input: 0, output: 0, cache_read: 0, cache_write: 0 }),
     started_at: iso(r.started_at), last_at: iso(r.last_at),
+    intent: r.intent || 'cold', signals: jsonb(r.signals, []), contact: jsonb(r.contact, null),
   };
 }
 
@@ -375,4 +377,44 @@ export async function productStats30d(tenantId: string, productId: string): Prom
   const out = { clicks: 0, add_to_cart: 0, cards_shown: 0 };
   for (const row of r.rows as any[]) { if (row.kind === 'card_click') out.clicks = row.n; if (row.kind === 'add_to_cart') out.add_to_cart = row.n; if (row.kind === 'card_shown') out.cards_shown = row.n; }
   return out;
+}
+
+// ── Статус клиента: сигналы намерения и контакт ───────────────────────────────
+
+function cleanContact(c: { name?: string; phone?: string; email?: string } | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of ['name', 'phone', 'email'] as const) { const v = String((c as any)?.[k] || '').trim().slice(0, 120); if (v) out[k] = v; }
+  return out;
+}
+
+/** Добавить сигналы (без дублей по ключу) и контакт; вернуть статус и стал ли диалог «горячим» только что. */
+export async function addConversationSignals(tenantId: string, id: string, keys: string[], contact?: { name?: string; phone?: string; email?: string } | null, text?: string): Promise<{ intent: 'cold' | 'warm' | 'hot'; becameHot: boolean }> {
+  const now = new Date().toISOString();
+  const mk = (existing: Signal[]) => { const have = new Set(existing.map((x) => x.k)); return keys.filter((k) => !have.has(k)).map((k) => ({ k, at: now, ...(text && (k === 'buy' || k === 'contact') ? { text: String(text).slice(0, 120) } : {}) })); };
+  if (isFallbackActive()) {
+    const m = memConversations.get(id);
+    if (!m) return { intent: 'cold', becameHot: false };
+    const prev = m.intent || 'cold';
+    m.signals = [...(m.signals || []), ...mk(m.signals || [])].slice(-50);
+    m.intent = intentOf(m.signals);
+    if (contact) m.contact = { ...(m.contact || {}), ...cleanContact(contact) };
+    return { intent: m.intent, becameHot: prev !== 'hot' && m.intent === 'hot' };
+  }
+  const r = await pool.query(`SELECT intent, signals, contact FROM commerce_conversations WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
+  const row = (r.rows as any[])[0];
+  if (!row) return { intent: 'cold', becameHot: false };
+  const prev = row.intent || 'cold';
+  const existing: Signal[] = jsonb(row.signals, []);
+  const signals = [...existing, ...mk(existing)].slice(-50);
+  const intent = intentOf(signals);
+  const merged = contact ? { ...jsonb(row.contact, {}), ...cleanContact(contact) } : jsonb(row.contact, null);
+  await pool.query(`UPDATE commerce_conversations SET intent = $3, signals = $4::jsonb, contact = $5::jsonb WHERE tenant_id = $1 AND id = $2`, [tenantId, id, intent, JSON.stringify(signals), merged && Object.keys(merged).length ? JSON.stringify(merged) : null]);
+  return { intent, becameHot: prev !== 'hot' && intent === 'hot' };
+}
+
+/** Сколько диалогов стали «горячими» (активность за последние N часов). */
+export async function hotConversationsSince(tenantId: string, hours: number): Promise<number> {
+  if (isFallbackActive()) return Array.from(memConversations.values()).filter((c) => c.tenant_id === tenantId && c.intent === 'hot' && Date.now() - +new Date(c.last_at) < hours * 3_600_000).length;
+  const r = await pool.query(`SELECT count(*)::int AS n FROM commerce_conversations WHERE tenant_id = $1 AND intent = 'hot' AND last_at > now() - ($2 || ' hours')::interval`, [tenantId, String(hours)]);
+  return Number((r.rows as any[])[0]?.n || 0);
 }

@@ -28,7 +28,8 @@
       "store": "Store",
       "keys": "Keys & models",
       "telegram": "Notifications",
-      "danger": "Danger zone"
+      "danger": "Danger zone",
+      "pixels": "Pixels & consent"
     }
   },
   "paywall": {
@@ -431,6 +432,50 @@
       "sent": "Sent: {{n}}",
       "cancel": "Cancel",
       "cancelled": "Cancelled"
+    },
+    "visitor": {
+      "title": "Customer",
+      "device": "Device",
+      "phone": "Phone",
+      "tablet": "Tablet",
+      "desktop": "Desktop",
+      "browser": "Browser",
+      "inApp": "inside {{app}}",
+      "lang": "Language",
+      "tz": "Time zone",
+      "city": "City",
+      "source": "Source",
+      "visits": "Visits",
+      "installed": "App",
+      "installedYes": "installed",
+      "installedNo": "no",
+      "push": "Notifications",
+      "pushOn": "on",
+      "pushOff": "no",
+      "unknown": "—"
+    },
+    "clientBadge": "Customer: ready to buy or left a contact",
+    "client": {
+      "title": "Customer",
+      "hot": "Ready to buy",
+      "warm": "Interested",
+      "cold": "Browsing",
+      "noContact": "No contact left",
+      "noSignals": "No signals yet: the agent marks “I’ll buy”, call-back requests, price and delivery questions, cart and leads.",
+      "signal": {
+        "buy": "said they are buying",
+        "contact": "asked to be contacted",
+        "phone_given": "left a phone",
+        "email_given": "left an email",
+        "price": "asked the price",
+        "delivery": "asked about delivery",
+        "payment": "asked about payment",
+        "availability": "asked availability",
+        "cart": "added to cart",
+        "checkout": "went to checkout",
+        "lead": "left a request",
+        "purchase": "purchased"
+      }
     }
   },
   "leads": {
@@ -560,7 +605,38 @@
     "wiped": "Deleted: {{n}}",
     "sources": "Catalog sources",
     "sourcesHint": "Site, Instagram, TikTok, Telegram channel: the agent reads them and builds the catalog itself.",
-    "jump": "Jump to"
+    "jump": "Jump to",
+    "pixels": "Pixels & tags",
+    "pixelsHint": "Each store has its own ids. They work on the bot page opened by link: PageView, card view, cart, lead. Retargeting and lookalike audiences are set up in the ad accounts.",
+    "pixelMeta": "Meta Pixel ID",
+    "pixelMetaHint": "Meta Events Manager → Data sources → Pixel → 15–16 digit id",
+    "pixelTiktok": "TikTok Pixel ID",
+    "pixelTiktokHint": "TikTok Ads Manager → Assets → Events → Web → Pixel ID (e.g. C1A2B3…)",
+    "pixelGoogle": "Google tag ID",
+    "pixelGoogleHint": "Google Analytics 4 (G-…) or Google Ads (AW-…)",
+    "pixelsCheck": "Check",
+    "consent": "Consent banner (EU / US)",
+    "consentHint": "Turn on if your customers are in the EU/EEA, the UK or California. Pixels do not load until “Accept”; the chat’s own data (visitor id, messages) is needed for the service and requires no consent. Without the banner pixels fire immediately — the store owner is responsible for compliance.",
+    "consentEnabled": "Show the consent banner on the bot page",
+    "privacyUrl": "Privacy policy page",
+    "privacyUrlHint": "Linked from the banner. Required in the EU: who the controller is, what data, purposes, retention, how to withdraw consent.",
+    "pixelsStatus": {
+      "empty": "not set",
+      "invalid": "invalid format",
+      "reachable": "format is valid, script is reachable",
+      "notFound": "the network returned an error — check the id",
+      "network": "could not check (network)"
+    },
+    "emailTitle": "Emails to the owner",
+    "emailStatus": "Emails go to {{email}}: leads, orders, hot customers, daily summary.",
+    "emailNone": "Email is not configured on the server (SMTP) — contact VibeVox support.",
+    "emailNoAddress": "The address appears after you sign in to the cabinet.",
+    "emailTest": "Send test email",
+    "emailTestOk": "Email sent to {{to}}",
+    "emailNotify": "Copy notifications to email",
+    "digest": "Daily summary in the morning (Telegram and email)",
+    "digestNow": "Summary now",
+    "digestSent": "Summary sent: Telegram {{tg}}, email {{mail}}"
   },
   "notify": {
     "title": "Telegram notifications",
@@ -662,6 +738,13 @@
     "push": {
       "button": "Get notified about replies and news",
       "on": "Notifications are on"
+    },
+    "consent": {
+      "text": "We use cookies and ad-network pixels to show you relevant offers.",
+      "policy": "Privacy policy",
+      "accept": "Accept",
+      "decline": "Decline",
+      "settings": "Cookies"
     }
   },
   "srv": {
@@ -824,7 +907,8 @@
       "lead": "🛒 <b>Request from the {{brand}} widget</b>\n<b>Name:</b> {{name}}\n<b>Phone:</b> {{phone}}\n<b>Email:</b> {{email}}",
       "leadTopic": "\n<b>Topic:</b> {{reason}}",
       "leadNote": "\n<b>Comment:</b> {{note}}",
-      "order": "🧾 <b>Order summary from the {{brand}} chat</b>\n{{items}}\n<b>Total:</b> {{total}} {{currency}}\nThe customer went to checkout on the site."
+      "order": "🧾 <b>Order summary from the {{brand}} chat</b>\n{{items}}\n<b>Total:</b> {{total}} {{currency}}\nThe customer went to checkout on the site.",
+      "hot": "🔥 <b>Hot customer — {{brand}}</b>\nWrote: “{{text}}”\nConversation: {{url}}"
     },
     "dialog": {
       "notFound": "Conversation not found"
@@ -848,6 +932,28 @@
       "limit": "No more than {{n}} push notifications per day to one customer",
       "noSubs": "This customer has no notification subscription",
       "textRequired": "Enter a title, text and a valid date"
+    },
+    "email": {
+      "hotSubject": "🔥 Hot customer — {{brand}}",
+      "leadSubject": "New request — {{brand}}",
+      "orderSubject": "Order summary from chat — {{brand}}",
+      "testSubject": "Commerce Agents email check",
+      "testText": "Emails from the agent will arrive at this address: customer requests, order summaries, hot customers and the daily summary.",
+      "notConfigured": "Email is not configured on the server (SMTP)",
+      "noAddress": "Owner address not found"
+    },
+    "digest": {
+      "title": "📊 <b>{{brand}} — daily summary</b>",
+      "subject": "Daily summary — {{brand}}",
+      "quiet": "No conversations in the last 24 hours.",
+      "dialogs": "Conversations: {{n}}",
+      "cards": "Cards shown: {{n}}",
+      "cart": "Added to cart: {{n}} · Leads: {{leads}} · Purchases: {{purchases}}",
+      "revenue": "Revenue via the agent: {{sum}}",
+      "hot": "🔥 Hot customers: {{n}}",
+      "empty": "Asked for, but not in the catalog: {{list}}",
+      "pending": "Awaiting approval: {{n}} changes",
+      "link": "Cabinet: {{url}}"
     }
   }
 }

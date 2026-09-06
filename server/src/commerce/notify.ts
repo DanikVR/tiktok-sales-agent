@@ -10,6 +10,7 @@ import pool, { isFallbackActive } from '../db.js';
 import { encryptSecret, decryptSecret } from '../encryption.js';
 import { getCommerceTelegramBotToken } from '../config.js';
 import { tw, normalizeLang, LocalizedError } from './i18n.js';
+import { sendClientEmail } from '../email.js';
 
 const TG = 'https://api.telegram.org';
 
@@ -226,4 +227,20 @@ export async function handlePlatformUpdate(update: any): Promise<void> {
   }
   if (/^\/stop/.test(text)) { const n = await unlinkChatEverywhere(chatId); await say(tw(userLang, n ? 'srv.tg.stopped' : 'srv.tg.notLinked')); return; }
   if (/^\/start/.test(text)) await say(tw(userLang, 'srv.tg.start'));
+}
+
+// ── Почта владельца: параллельно с Telegram (заявки, заказы, горячие клиенты, сводка) ───────────
+export function emailConfigured(): boolean { return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS); }
+
+/** Письмо владельцу магазина на почту, под которой он входит в кабинет. 1 — отправлено, 0 — нет адреса/выключено/ошибка. */
+export async function notifyOwnerEmail(tenantId: string, subject: string, text: string): Promise<number> {
+  if (!emailConfigured() || isFallbackActive()) return 0;
+  try {
+    const r = await pool.query(`SELECT owner_email, email_notify, brand_name FROM commerce_settings WHERE tenant_id = $1`, [tenantId]);
+    const row = (r.rows as any[])[0];
+    if (!row?.owner_email || row.email_notify === false) return 0;
+    const res = await sendClientEmail(row.owner_email, subject, text, row.brand_name || 'Commerce Agents');
+    if (!res.ok) console.warn('[commerce/notify] email failed:', res.error);
+    return res.ok ? 1 : 0;
+  } catch (e) { console.warn('[commerce/notify] email failed:', (e as Error).message); return 0; }
 }
