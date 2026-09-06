@@ -1,0 +1,9 @@
+tiktok-sales-agent
+Copyright 2026 DanikVR (https://t.me/GuruAppSheet)
+
+This product implements patterns, tool contracts and guardrails described in
+"The anatomy of effective commerce agents" (claude.com) and in the reference
+blueprint anthropics/commerce-agents (https://github.com/anthropics/commerce-agents),
+licensed under the Apache License, Version 2.0. Copyright Anthropic, PBC.
+
+The hosted edition of this agent is operated at https://comag.vibevox.pro.
